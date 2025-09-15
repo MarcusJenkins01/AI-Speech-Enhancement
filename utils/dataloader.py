@@ -1,6 +1,7 @@
 import math
 import numpy as np
 import sounddevice
+import torch
 from torch.utils.data import Dataset, DataLoader
 import glob
 import os
@@ -81,7 +82,7 @@ class GRIDDataset(Dataset):
     stft = librosa.stft(audio_signal, n_fft=self.n_fft, hop_length=self.hop_length, window=han_window, center=False)
     power = np.abs(stft) ** 2
     log_power = np.log(power + eps)
-    return log_power[1:, :]  # Drop DC bin
+    return torch.tensor(log_power[1:, :])  # Drop DC bin
 
   def _get_targets(self, mixed_audio, clean_padded, eps=1e-8):
     # Compute STFTs
@@ -94,13 +95,25 @@ class GRIDDataset(Dataset):
     mask_real = np.real(cirm)
     mask_imag = np.imag(cirm)
 
+    # Truncate and apply sigmoid for numerical stability
+    mask_real = np.clip(mask_real, a_min=-5, a_max=5)
+    mask_imag = np.clip(mask_imag, a_min=-5, a_max=5)
+    mask_real = 1 / (1 + np.exp(-mask_real))
+    mask_imag = 1 / (1 + np.exp(-mask_imag))
+
     # Phase correction angle
     phase_noisy = np.angle(noisy_stft)
     phase_clean = np.angle(clean_stft)
     phase_corr = phase_clean - phase_noisy
     phase_corr = (phase_corr + np.pi) % (2 * np.pi) - np.pi
 
-    return mask_real, mask_imag, phase_corr
+    # Central frame (without DC bin)
+    center_idx = mask_real.shape[1] // 2
+    cirm_r = mask_real[1:, center_idx]
+    cirm_i = mask_imag[1:, center_idx]
+    phase_corr_center = phase_corr[1:, center_idx]
+
+    return torch.tensor(cirm_r), torch.tensor(cirm_i), torch.tensor(phase_corr_center)
 
   def __getitem__(self, idx):
     audio_path = self.audio_paths[idx]
@@ -110,7 +123,7 @@ class GRIDDataset(Dataset):
     noise_signal = self._load_resample(noise_path)
     mixed_audio, clean_padded = self._mix_with_noise(audio_signal, noise_signal)
 
-    log_power = self._get_spectrogram(mixed_audio)
-    mask_real, mask_imag, phase_corr = self._get_targets(mixed_audio, clean_padded)
+    log_power = self._get_spectrogram(mixed_audio).unsqueeze(0)
+    cirm_r, cirm_i, phase_corr_center = self._get_targets(mixed_audio, clean_padded)
 
-    return log_power, mask_real, mask_imag, phase_corr
+    return log_power, cirm_r, cirm_i, phase_corr_center

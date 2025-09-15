@@ -41,7 +41,7 @@ class CNN_DNN(nn.Module):
       ConvLayer(in_channels=64, out_channels=64, kernel_size=(2, 2), stride=(1, 1), pool=False),
     )
     self.dnn = nn.Sequential(
-      DNNLayer(288, 1024),
+      DNNLayer(18432, 1024),
       DNNLayer(1024, 512),
       DNNLayer(512, 256),
       DNNLayer(256, 320, output_layer=True)
