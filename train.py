@@ -21,7 +21,7 @@ class GESLoss:
     loss = 0.5 * torch.mean(
       torch.sum((cirm_r - cirm_r_hat) ** 2, dim=-1)
       + self.a_imag * torch.sum((cirm_i - cirm_i_hat) ** 2, dim=-1)
-      + self.a_ph * torch.sum((phase_corr - phase_corr_hat) ** 2, dim=-1)
+      + self.a_ph * torch.sum(torch.abs(phase_corr - phase_corr_hat), dim=-1)
     )
     return loss
 
