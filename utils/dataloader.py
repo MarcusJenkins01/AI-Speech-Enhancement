@@ -10,7 +10,7 @@ import librosa
 
 class GRIDDataset(Dataset):
   def __init__(self, dataset_dir, noise_dir, split, snr=0, audio_ext=".wav", noise_ext=".wav", seed=0,
-               target_sr=16000, target_length=48000, window_size=0.02, window_overlap=0.5):
+               target_sr=16000, window_size=0.02, window_overlap=0.5, n_frames=47):
     super().__init__()
     assert "." in audio_ext and "." in noise_ext, "Audio extensions must be .<ext>"
     self.split = split
@@ -23,6 +23,10 @@ class GRIDDataset(Dataset):
     self.target_length = target_length
     self.window_size = window_size
     self.window_overlap = window_overlap
+    self.n_frames = n_frames
+    self.n_fft = int(self.window_size * self.target_sr)
+    self.hop_length = int(self.n_fft * self.window_overlap)
+    self.target_length = self.n_fft + (self.n_frames - 1) * self.hop_length
 
   def __len__(self):
     return len(self.audio_paths)
@@ -37,21 +41,14 @@ class GRIDDataset(Dataset):
     if len(noise_signal) == self.target_length:
       return noise_signal
 
-    # If the noise is shorter than the target length then tile it
     if len(noise_signal) < self.target_length:
       repeats = math.ceil(self.target_length / len(noise_signal))
       noise_signal = np.tile(noise_signal, repeats)
 
-    # Get a random crop of the noise signal
     start = self.noise_crop_rng.randint(0, len(noise_signal) - self.target_length + 1)
-    noise_segment = noise_signal[start:start + self.target_length]
-
-    return noise_segment
+    return noise_signal[start:start + self.target_length]
 
   def _mix_with_noise(self, audio_signal, noise_signal):
-    assert len(audio_signal) <= self.target_length, \
-      f"Audio length exceeds target_length: {len(audio_signal)} > {self.target_length}"
-
     # Select a random crop of the noise based on target_length
     noise_segment = self._align_noise_length(noise_signal)
 
@@ -62,11 +59,18 @@ class GRIDDataset(Dataset):
     scaling_factor = np.sqrt(audio_power / (noise_power * snr_linear))
     noise_segment = noise_segment * scaling_factor
 
-    # Mix audio into the noise at a random offset
-    audio_offset = self.noise_crop_rng.randint(0, self.target_length - len(audio_signal) + 1)
+    # Mix audio into the noise
+    if len(audio_signal) > self.target_length:
+      # Randomly choose a crop of the speech
+      start = self.noise_crop_rng.randint(0, len(audio_signal) - self.target_length)
+      audio_signal = audio_signal[start:start + self.target_length]
+      audio_offset = 0
+    else:
+      # Random offset if audio is shorter than the target length
+      audio_offset = self.noise_crop_rng.randint(0, self.target_length - len(audio_signal) + 1)
+
     mixed_audio = noise_segment.copy()
-    mixed_audio[audio_offset:audio_offset + len(audio_signal)] = (
-        mixed_audio[audio_offset:audio_offset + len(audio_signal)] + audio_signal)
+    mixed_audio[audio_offset:audio_offset + len(audio_signal)] += audio_signal
 
     clean_padded = np.zeros_like(noise_segment)
     clean_padded[audio_offset:audio_offset + len(audio_signal)] = audio_signal
@@ -75,11 +79,9 @@ class GRIDDataset(Dataset):
 
   def _get_targets(self, mixed_audio, clean_padded, eps=1e-8):
     # Compute STFTs
-    n_fft = int(self.window_size * self.target_sr)
-    hop_length = int(n_fft * self.window_overlap)
-    win = np.hanning(n_fft)
-    noisy_stft = librosa.stft(mixed_audio, n_fft=n_fft, hop_length=hop_length, window=win, center=True)
-    clean_stft = librosa.stft(clean_padded, n_fft=n_fft, hop_length=hop_length, window=win, center=True)
+    han_window = np.hanning(self.n_fft)
+    noisy_stft = librosa.stft(mixed_audio, n_fft=self.n_fft, hop_length=self.hop_length, window=han_window, center=True)
+    clean_stft = librosa.stft(clean_padded, n_fft=self.n_fft, hop_length=self.hop_length, window=han_window, center=True)
 
     # Ideal complex ratio mask (CIRM)
     cirm = clean_stft / (noisy_stft + eps)
@@ -114,10 +116,10 @@ if __name__ == "__main__":
   target_length = 48000
   target_snr = 16000
   train_dataset = GRIDDataset(dataset_dir="D:/Datasets/GRID/Splits", noise_dir="D:/Datasets/DEMAND/Splits",
-                             split="train", snr=0, target_sr=target_snr, target_length=target_length)
+                             split="train", snr=0, target_sr=target_snr, n_frames=47)
   train_loader = DataLoader(train_dataset, shuffle=True, batch_size=1)
 
   for mixed_audio, clean_padded in train_loader:
-    clean_padded = clean_padded[0]
-    sounddevice.play(clean_padded, samplerate=target_snr)
+    mixed_audio = mixed_audio[0]
+    sounddevice.play(mixed_audio, samplerate=target_snr)
     sounddevice.wait()
