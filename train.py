@@ -37,9 +37,9 @@ def train(args):
   optimiser = AdamW(model.parameters())
   loss_fn = GESLoss(a_imag=2.5, a_ph=0.1)
 
-  total_loss = 0
-
   for epoch in range(args.epochs):
+    epoch_loss = 0
+
     for log_power, cirm_r, cirm_i, phase_corr in tqdm.tqdm(train_loader, desc=f"Training epoch {epoch + 1}"):
       log_power = log_power.cuda()
       cirm_r = cirm_r.cuda()
@@ -52,9 +52,9 @@ def train(args):
       loss.backward()
       optimiser.step()
 
-      total_loss += loss.item()
+      epoch_loss += loss.item()
 
-  print(f"Mean loss: {total_loss / len(train_loader)}")
+    print(f"Mean loss: {epoch_loss / len(train_loader)}")
 
 if __name__ == "__main__":
   args = DotMap()
