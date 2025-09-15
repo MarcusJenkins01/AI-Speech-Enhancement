@@ -20,7 +20,6 @@ class GRIDDataset(Dataset):
     self.noise_path_rng = random.Random(seed)
     self.noise_crop_rng = random.Random(seed)
     self.target_sr = target_sr
-    self.target_length = target_length
     self.window_size = window_size
     self.window_overlap = window_overlap
     self.n_frames = n_frames
@@ -77,11 +76,18 @@ class GRIDDataset(Dataset):
 
     return mixed_audio, clean_padded
 
+  def _get_spectrogram(self, audio_signal, eps=1e-8):
+    han_window = np.hanning(self.n_fft)
+    stft = librosa.stft(audio_signal, n_fft=self.n_fft, hop_length=self.hop_length, window=han_window, center=False)
+    power = np.abs(stft) ** 2
+    log_power = np.log(power + eps)
+    return log_power[1:, :]  # Drop DC bin
+
   def _get_targets(self, mixed_audio, clean_padded, eps=1e-8):
     # Compute STFTs
     han_window = np.hanning(self.n_fft)
-    noisy_stft = librosa.stft(mixed_audio, n_fft=self.n_fft, hop_length=self.hop_length, window=han_window, center=True)
-    clean_stft = librosa.stft(clean_padded, n_fft=self.n_fft, hop_length=self.hop_length, window=han_window, center=True)
+    noisy_stft = librosa.stft(mixed_audio, n_fft=self.n_fft, hop_length=self.hop_length, window=han_window, center=False)
+    clean_stft = librosa.stft(clean_padded, n_fft=self.n_fft, hop_length=self.hop_length, window=han_window, center=False)
 
     # Ideal complex ratio mask (CIRM)
     cirm = clean_stft / (noisy_stft + eps)
@@ -104,22 +110,7 @@ class GRIDDataset(Dataset):
     noise_signal = self._load_resample(noise_path)
     mixed_audio, clean_padded = self._mix_with_noise(audio_signal, noise_signal)
 
+    log_power = self._get_spectrogram(mixed_audio)
     mask_real, mask_imag, phase_corr = self._get_targets(mixed_audio, clean_padded)
 
-    return mixed_audio, clean_padded
-
-
-if __name__ == "__main__":
-  #############
-  # Debugging #
-  #############
-  target_length = 48000
-  target_snr = 16000
-  train_dataset = GRIDDataset(dataset_dir="D:/Datasets/GRID/Splits", noise_dir="D:/Datasets/DEMAND/Splits",
-                             split="train", snr=0, target_sr=target_snr, n_frames=47)
-  train_loader = DataLoader(train_dataset, shuffle=True, batch_size=1)
-
-  for mixed_audio, clean_padded in train_loader:
-    mixed_audio = mixed_audio[0]
-    sounddevice.play(mixed_audio, samplerate=target_snr)
-    sounddevice.wait()
+    return log_power, mask_real, mask_imag, phase_corr
