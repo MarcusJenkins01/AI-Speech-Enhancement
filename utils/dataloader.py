@@ -102,10 +102,7 @@ class GRIDDataset(Dataset):
     mask_imag = 1 / (1 + np.exp(-mask_imag))
 
     # Phase correction angle
-    phase_noisy = np.angle(noisy_stft)
-    phase_clean = np.angle(clean_stft)
-    phase_corr = phase_clean - phase_noisy
-    phase_corr = (phase_corr + np.pi) % (2 * np.pi) - np.pi
+    phase_corr = np.arctan2(mask_imag, mask_real)
 
     # Central frame (without DC bin)
     center_idx = mask_real.shape[1] // 2
