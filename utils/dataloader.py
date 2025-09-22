@@ -10,26 +10,37 @@ import librosa
 
 
 class GRIDDataset(Dataset):
-  def __init__(self, dataset_dir, noise_dir, split, snr=0, audio_ext=".wav", noise_ext=".wav", seed=0,
-               target_sr=16000, window_size=0.02, window_overlap=0.5, n_frames=47):
+  def __init__(self, dataset_dir, noise_dir, split, args, seed=0, test=False):
     super().__init__()
-    assert "." in audio_ext and "." in noise_ext, "Audio extensions must be .<ext>"
+    assert "." in args.audio_ext and "." in args.noise_ext, "Audio extensions must be .<ext>"
     self.split = split
-    self.snr = snr
-    self.audio_paths = glob.glob(os.path.join(dataset_dir, split, f"*/*{audio_ext}"))
-    self.noise_paths = glob.glob(os.path.join(noise_dir, split, f"*{noise_ext}"))
+    self.snr = args.snr
+    self.audio_paths = glob.glob(os.path.join(dataset_dir, split, f"*/*{args.audio_ext}"))
+    self.noise_paths = glob.glob(os.path.join(noise_dir, split, f"*{args.noise_ext}"))
+    self.seed = seed
     self.noise_path_rng = random.Random(seed)
     self.noise_crop_rng = random.Random(seed)
-    self.target_sr = target_sr
-    self.window_size = window_size
-    self.window_overlap = window_overlap
-    self.n_frames = n_frames
+    self.target_sr = args.target_sr
+    self.window_size = args.window_size
+    self.window_overlap = args.window_overlap
+    self.test = test
+
+    # Testing mode uses the full audio sample
+    if self.test:
+      self.n_frames = args.n_frames_test
+    else:
+      self.n_frames = args.n_frames
+
     self.n_fft = int(self.window_size * self.target_sr)
     self.hop_length = int(self.n_fft * self.window_overlap)
     self.target_length = self.n_fft + (self.n_frames - 1) * self.hop_length
 
   def __len__(self):
     return len(self.audio_paths)
+
+  def reset_seed(self):
+    self.noise_path_rng.seed(self.seed)
+    self.noise_crop_rng.seed(self.seed)
 
   def _load_resample(self, audio_path):
     audio_signal, a_sr = librosa.load(audio_path, sr=None)
@@ -45,7 +56,7 @@ class GRIDDataset(Dataset):
       repeats = math.ceil(self.target_length / len(noise_signal))
       noise_signal = np.tile(noise_signal, repeats)
 
-    start = self.noise_crop_rng.randint(0, len(noise_signal) - self.target_length + 1)
+    start = self.noise_crop_rng.randint(0, len(noise_signal) - self.target_length)
     return noise_signal[start:start + self.target_length]
 
   def _mix_with_noise(self, audio_signal, noise_signal):
@@ -67,7 +78,7 @@ class GRIDDataset(Dataset):
       audio_offset = 0
     else:
       # Random offset if audio is shorter than the target length
-      audio_offset = self.noise_crop_rng.randint(0, self.target_length - len(audio_signal) + 1)
+      audio_offset = self.noise_crop_rng.randint(0, self.target_length - len(audio_signal))
 
     mixed_audio = noise_segment.copy()
     mixed_audio[audio_offset:audio_offset + len(audio_signal)] += audio_signal
@@ -77,18 +88,18 @@ class GRIDDataset(Dataset):
 
     return mixed_audio, clean_padded
 
-  def _get_spectrogram(self, audio_signal, eps=1e-8):
-    han_window = np.hanning(self.n_fft)
-    stft = librosa.stft(audio_signal, n_fft=self.n_fft, hop_length=self.hop_length, window=han_window, center=False)
+  def _get_spectrogram_and_stft(self, audio_signal, eps=1e-8):
+    window = np.hanning(self.n_fft)
+    stft = librosa.stft(audio_signal, n_fft=self.n_fft, hop_length=self.hop_length, window=window, center=False)
     power = np.abs(stft) ** 2
     log_power = np.log(power + eps)
-    return torch.tensor(log_power[1:, :])  # Drop DC bin
+    return torch.tensor(log_power), torch.from_numpy(stft).to(torch.complex64)
 
-  def _get_targets(self, mixed_audio, clean_padded, eps=1e-8):
+  def _get_cirm_targets(self, mixed_audio, clean_padded, eps=1e-8):
     # Compute STFTs
-    han_window = np.hanning(self.n_fft)
-    noisy_stft = librosa.stft(mixed_audio, n_fft=self.n_fft, hop_length=self.hop_length, window=han_window, center=False)
-    clean_stft = librosa.stft(clean_padded, n_fft=self.n_fft, hop_length=self.hop_length, window=han_window, center=False)
+    window = np.hanning(self.n_fft)
+    noisy_stft = librosa.stft(mixed_audio, n_fft=self.n_fft, hop_length=self.hop_length, window=window, center=False)
+    clean_stft = librosa.stft(clean_padded, n_fft=self.n_fft, hop_length=self.hop_length, window=window, center=False)
 
     # Ideal complex ratio mask (CIRM)
     cirm = clean_stft / (noisy_stft + eps)
@@ -104,11 +115,11 @@ class GRIDDataset(Dataset):
     # Phase correction angle
     phase_corr = np.arctan2(mask_imag, mask_real)
 
-    # Central frame (without DC bin)
+    # Central frame
     center_idx = mask_real.shape[1] // 2
-    cirm_r = mask_real[1:, center_idx]
-    cirm_i = mask_imag[1:, center_idx]
-    phase_corr_center = phase_corr[1:, center_idx]
+    cirm_r = mask_real[:, center_idx]
+    cirm_i = mask_imag[:, center_idx]
+    phase_corr_center = phase_corr[:, center_idx]
 
     return torch.tensor(cirm_r), torch.tensor(cirm_i), torch.tensor(phase_corr_center)
 
@@ -120,7 +131,12 @@ class GRIDDataset(Dataset):
     noise_signal = self._load_resample(noise_path)
     mixed_audio, clean_padded = self._mix_with_noise(audio_signal, noise_signal)
 
-    log_power = self._get_spectrogram(mixed_audio).unsqueeze(0)
-    cirm_r, cirm_i, phase_corr_center = self._get_targets(mixed_audio, clean_padded)
+    log_power, noisy_stft = self._get_spectrogram_and_stft(mixed_audio)
+    log_power = log_power.unsqueeze(0)
 
-    return log_power, cirm_r, cirm_i, phase_corr_center
+    # No CIRM needed for testing, only clean audio for ESTOI evaluation
+    if self.test:
+      return log_power, torch.tensor(clean_padded), noisy_stft
+
+    cirm_r, cirm_i, phase_corr_center = self._get_cirm_targets(mixed_audio, clean_padded)
+    return log_power, cirm_r, cirm_i, phase_corr_center, torch.tensor(clean_padded)
