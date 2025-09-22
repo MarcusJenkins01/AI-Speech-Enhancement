@@ -35,16 +35,16 @@ class CNN_DNN(nn.Module):
     super().__init__()
     self.cnn = nn.Sequential(
       ConvLayer(in_channels=1, out_channels=16, kernel_size=(2, 2), stride=(1, 1)),
-      ConvLayer(in_channels=16, out_channels=32, kernel_size=(3, 3), stride=(1, 1)),
+      ConvLayer(in_channels=16, out_channels=32, kernel_size=(3, 3), stride=(2, 2)),
       ConvLayer(in_channels=32, out_channels=64, kernel_size=(2, 2), stride=(1, 1), pool=False),
       ConvLayer(in_channels=64, out_channels=64, kernel_size=(2, 2), stride=(1, 1), pool=False),
       ConvLayer(in_channels=64, out_channels=64, kernel_size=(2, 2), stride=(1, 1), pool=False),
     )
     self.dnn = nn.Sequential(
-      DNNLayer(18432, 1024),
+      DNNLayer(3264, 1024),
       DNNLayer(1024, 512),
       DNNLayer(512, 256),
-      DNNLayer(256, 320, output_layer=True)
+      DNNLayer(256, 161*2, output_layer=True)
     )
 
   def forward(self, x):
