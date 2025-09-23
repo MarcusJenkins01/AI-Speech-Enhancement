@@ -25,6 +25,11 @@ class GRIDDataset(Dataset):
     self.window_overlap = args.window_overlap
     self.test = test
 
+    # Subset
+    if 0 < args.subset < 1:
+      random.Random(0).shuffle(self.audio_paths)
+      self.audio_paths = self.audio_paths[:int(len(self.audio_paths)*args.subset)]
+
     # Testing mode uses the full audio sample
     if self.test:
       self.n_frames = args.n_frames_test

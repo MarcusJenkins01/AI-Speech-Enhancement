@@ -112,8 +112,8 @@ def train(args):
                               split="train", args=args, seed=0, test=False)
   val_dataset = GRIDDataset(dataset_dir="D:/Datasets/GRID/Splits", noise_dir="D:/Datasets/DEMAND/Splits",
                               split="val", args=args, seed=1, test=True)
-  train_loader = DataLoader(train_dataset, shuffle=True, batch_size=128)
-  val_loader = DataLoader(val_dataset, shuffle=False, batch_size=128)
+  train_loader = DataLoader(train_dataset, shuffle=True, batch_size=args.batch_size, num_workers=4)
+  val_loader = DataLoader(val_dataset, shuffle=False, batch_size=args.batch_size, num_workers=4)
 
   # Load CNN+DNN model
   model = CNN_DNN().cuda()
@@ -140,6 +140,8 @@ def train(args):
 
 if __name__ == "__main__":
   args = DotMap()
+  args.batch_size = 64
+  args.subset = 0.2
   args.target_sr = 16000
   args.window_size = 0.02
   args.window_overlap = 0.5
